@@ -1,3 +1,8 @@
+# loader.py - This script is responsible for loading data from Stack Overflow into a Neo4j database.
+# It uses the Stack Exchange API to fetch questions and answers, computes their embeddings using a
+# pre-trained model, and then stores them in the database. Additionally, it provides a Streamlit
+# interface for users to specify the data they want to import.
+
 import os
 import requests
 from dotenv import load_dotenv
@@ -8,8 +13,10 @@ from chains import load_embedding_model
 from utils import create_constraints, create_vector_index
 from PIL import Image
 
+# Load environment variables from a .env file
 load_dotenv(".env")
 
+# Retrieve Neo4j and Ollama configuration from environment variables
 url = os.getenv("NEO4J_URI")
 username = os.getenv("NEO4J_USERNAME")
 password = os.getenv("NEO4J_PASSWORD")
@@ -20,28 +27,37 @@ os.environ["NEO4J_URL"] = url
 
 logger = get_logger(__name__)
 
+# Base URL for the Stack Exchange API
 so_api_base_url = "https://api.stackexchange.com/2.3/search/advanced"
 
+# Load the embedding model to be used for creating vector embeddings of text
 embeddings, dimension = load_embedding_model(
     embedding_model_name, config={"ollama_base_url": ollama_base_url}, logger=logger
 )
 
+# Initialize the Neo4j graph database connection
 # if Neo4j is local, you can go to http://localhost:7474/ to browse the database
 neo4j_graph = Neo4jGraph(url=url, username=username, password=password)
 
+# Create constraints and vector index in the Neo4j database to optimize queries
 create_constraints(neo4j_graph)
 create_vector_index(neo4j_graph, dimension)
 
 
+# Function to load Stack Overflow data based on a specific tag and page number
 def load_so_data(tag: str = "neo4j", page: int = 1) -> None:
+    # Construct the API request parameters
     parameters = (
         f"?pagesize=100&page={page}&order=desc&sort=creation&answers=1&tagged={tag}"
         "&site=stackoverflow&filter=!*236eb_eL9rai)MOSNZ-6D3Q6ZKb0buI*IVotWaTb"
     )
+    # Fetch the data from Stack Exchange API
     data = requests.get(so_api_base_url + parameters).json()
+    # Insert the fetched data into the Neo4j database
     insert_so_data(data)
 
 
+# Function to load Stack Overflow data with high scores
 def load_high_score_so_data() -> None:
     parameters = (
         f"?fromdate=1664150400&order=desc&sort=votes&site=stackoverflow&"
@@ -51,6 +67,7 @@ def load_high_score_so_data() -> None:
     insert_so_data(data)
 
 
+# Function to insert the fetched Stack Overflow data into the Neo4j database
 def insert_so_data(data: dict) -> None:
     # Calculate embedding values for questions and answers
     for q in data["items"]:
@@ -61,6 +78,8 @@ def insert_so_data(data: dict) -> None:
                 question_text + "\n" + a["body_markdown"]
             )
 
+
+    # Cypher query to import the data into Neo4j
     # Cypher, the query language of Neo4j, is used to import the data
     # https://neo4j.com/docs/getting-started/cypher-intro/
     # https://neo4j.com/docs/cypher-cheat-sheet/5/auradb-enterprise/
@@ -95,7 +114,8 @@ def insert_so_data(data: dict) -> None:
     neo4j_graph.query(import_query, {"data": data["items"]})
 
 
-# Streamlit
+# Streamlit interface functions
+# Function to get the tag input from the user
 def get_tag() -> str:
     input_text = st.text_input(
         "Which tag questions do you want to import?", value="neo4j"
@@ -103,6 +123,7 @@ def get_tag() -> str:
     return input_text
 
 
+# Function to get the number of pages and start page input from the user
 def get_pages():
     col1, col2 = st.columns(2)
     with col1:
@@ -115,6 +136,7 @@ def get_pages():
     return (int(num_pages), int(start_page))
 
 
+# Function to render the Streamlit page
 def render_page():
     datamodel_image = Image.open("./images/datamodel.png")
     st.header("StackOverflow Loader")
@@ -124,6 +146,7 @@ def render_page():
     user_input = get_tag()
     num_pages, start_page = get_pages()
 
+    # Button to start the import process
     if st.button("Import", type="primary"):
         with st.spinner("Loading... This might take a minute or two."):
             try:
@@ -135,6 +158,8 @@ def render_page():
                 st.caption("Go to http://localhost:7474/ to interact with the database")
             except Exception as e:
                 st.error(f"Error: {e}", icon="🚨")
+                
+    # Expander for importing highly ranked questions
     with st.expander("Highly ranked questions rather than tags?"):
         if st.button("Import highly ranked questions"):
             with st.spinner("Loading... This might take a minute or two."):
@@ -144,5 +169,5 @@ def render_page():
                 except Exception as e:
                     st.error(f"Error: {e}", icon="🚨")
 
-
+# Call the function to render the Streamlit page
 render_page()
