@@ -1,3 +1,8 @@
+# pdf_bot.py - This script is a Streamlit application that allows users to upload a PDF file,
+# extract its text, and then interact with the text using a language model (LLM) to answer
+# questions about the content of the PDF. It uses Langchain for text extraction, vector embedding,
+# and retrieval-augmented question answering.
+
 import os
 
 import streamlit as st
@@ -12,12 +17,12 @@ from chains import (
     load_llm,
 )
 
-# load api key lib
+# Load environment variables from a .env file
 from dotenv import load_dotenv
 
 load_dotenv(".env")
 
-
+# Retrieve Neo4j and Ollama configuration from environment variables
 url = os.getenv("NEO4J_URI")
 username = os.getenv("NEO4J_USERNAME")
 password = os.getenv("NEO4J_PASSWORD")
@@ -29,12 +34,12 @@ os.environ["NEO4J_URL"] = url
 
 logger = get_logger(__name__)
 
-
+# Load the embedding model to be used for creating vector embeddings of text
 embeddings, dimension = load_embedding_model(
     embedding_model_name, config={"ollama_base_url": ollama_base_url}, logger=logger
 )
 
-
+# Define a callback handler for the language model's token generation
 class StreamHandler(BaseCallbackHandler):
     def __init__(self, container, initial_text=""):
         self.container = container
@@ -44,31 +49,33 @@ class StreamHandler(BaseCallbackHandler):
         self.text += token
         self.container.markdown(self.text)
 
-
+# Load the language model
 llm = load_llm(llm_name, logger=logger, config={"ollama_base_url": ollama_base_url})
 
-
+# Main function to run the Streamlit application
 def main():
     st.header("📄Chat with your pdf file")
 
-    # upload a your pdf file
+    # Upload a PDF file through the Streamlit interface
     pdf = st.file_uploader("Upload your PDF", type="pdf")
 
     if pdf is not None:
+        # Read the uploaded PDF file
         pdf_reader = PdfReader(pdf)
 
+        # Extract text from all pages of the PDF
         text = ""
         for page in pdf_reader.pages:
             text += page.extract_text()
 
-        # langchain_textspliter
+        # Split the extracted text into chunks suitable for processing
         text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=1000, chunk_overlap=200, length_function=len
         )
 
         chunks = text_splitter.split_text(text=text)
 
-        # Store the chunks part in db (vector)
+        # Store the text chunks in the Neo4j database as vector embeddings
         vectorstore = Neo4jVector.from_texts(
             chunks,
             url=url,
@@ -79,15 +86,19 @@ def main():
             node_label="PdfBotChunk",
             pre_delete_collection=True,  # Delete existing PDF data
         )
+        
+        # Initialize the RetrievalQA chain with the language model and vector store
         qa = RetrievalQA.from_chain_type(
             llm=llm, chain_type="stuff", retriever=vectorstore.as_retriever()
         )
 
-        # Accept user questions/query
+        # Accept user questions about the PDF content
         query = st.text_input("Ask questions about your PDF file")
 
         if query:
+            # Create a stream handler to display the LLM's responses
             stream_handler = StreamHandler(st.empty())
+            # Run the query through the RetrievalQA chain and display the answer
             qa.run(query, callbacks=[stream_handler])
 
 
