@@ -1,3 +1,8 @@
+# api.py - This script defines a FastAPI application that provides HTTP API endpoints for
+# interacting with a language model (LLM) and a Neo4j graph database. It supports both
+# streaming and non-streaming responses for question-answering and can generate tickets
+# based on user input. Essentially accomplishes everything that bot.py does but just with APIs and no UI.
+
 import os
 
 from langchain.graphs import Neo4jGraph
@@ -23,8 +28,10 @@ from sse_starlette.sse import EventSourceResponse
 from fastapi.middleware.cors import CORSMiddleware
 import json
 
+# Load environment variables from a .env file
 load_dotenv(".env")
 
+# Retrieve Neo4j and Ollama configuration from environment variables
 url = os.getenv("NEO4J_URI")
 username = os.getenv("NEO4J_USERNAME")
 password = os.getenv("NEO4J_PASSWORD")
@@ -34,26 +41,30 @@ llm_name = os.getenv("LLM")
 # Remapping for Langchain Neo4j integration
 os.environ["NEO4J_URL"] = url
 
+# Load the embedding model and create a vector index in the Neo4j database
 embeddings, dimension = load_embedding_model(
     embedding_model_name,
     config={"ollama_base_url": ollama_base_url},
     logger=BaseLogger(),
 )
 
+# Initialize the Neo4j graph database connection
 # if Neo4j is local, you can go to http://localhost:7474/ to browse the database
 neo4j_graph = Neo4jGraph(url=url, username=username, password=password)
 create_vector_index(neo4j_graph, dimension)
 
+# Load the language model
 llm = load_llm(
     llm_name, logger=BaseLogger(), config={"ollama_base_url": ollama_base_url}
 )
 
+# Configure the chains for LLM only and RAG
 llm_chain = configure_llm_only_chain(llm)
 rag_chain = configure_qa_rag_chain(
     llm, embeddings, embeddings_store_url=url, username=username, password=password
 )
 
-
+# Define a callback handler for streaming LLM responses to a queue
 class QueueCallback(BaseCallbackHandler):
     """Callback handler for streaming LLM responses to a queue."""
 
@@ -67,6 +78,7 @@ class QueueCallback(BaseCallbackHandler):
         return self.q.empty()
 
 
+# Function to stream LLM responses using a queue
 def stream(cb, q) -> Generator:
     job_done = object()
 
@@ -90,10 +102,11 @@ def stream(cb, q) -> Generator:
         except Empty:
             continue
 
-
+# Initialize the FastAPI application
 app = FastAPI()
 origins = ["*"]
 
+# Add CORS middleware to allow cross-origin requests
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -103,11 +116,13 @@ app.add_middleware(
 )
 
 
+# Root endpoint
 @app.get("/")
 async def root():
     return {"message": "Hello World"}
 
 
+# Pydantic models for request bodies
 class Question(BaseModel):
     text: str
     rag: bool = False
@@ -117,6 +132,7 @@ class BaseTicket(BaseModel):
     text: str
 
 
+# Streaming endpoint for question-answering
 @app.get("/query-stream")
 def qstream(question: Question = Depends()):
     output_function = llm_chain
@@ -139,6 +155,7 @@ def qstream(question: Question = Depends()):
     return EventSourceResponse(generate(), media_type="text/event-stream")
 
 
+# Non-streaming endpoint for question-answering
 @app.get("/query")
 async def ask(question: Question = Depends()):
     output_function = llm_chain
@@ -151,6 +168,7 @@ async def ask(question: Question = Depends()):
     return {"result": result["answer"], "model": llm_name}
 
 
+# Endpoint for generating a ticket based on user input
 @app.get("/generate-ticket")
 async def generate_ticket_api(question: BaseTicket = Depends()):
     new_title, new_question = generate_ticket(
